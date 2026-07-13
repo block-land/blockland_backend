@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { eq, and, gte, lte } from "drizzle-orm";
+import { eq, and, gte, lte, desc } from "drizzle-orm";
 import { latLngToCell } from "h3-js";
 import { mintTile, TILE_PRICE_USD, usdToLamports, getSolUsdPrice } from "../services/solana";
 import { db } from "../db/connection";
@@ -240,20 +240,42 @@ tiles.get("/", async (c) => {
 tiles.get("/owner/:wallet", async (c) => {
   try {
     const wallet = c.req.param("wallet");
-    const rows = await db
-      .select()
+    const limitQuery = c.req.query("limit");
+    const offsetQuery = c.req.query("offset");
+
+    // Fetch total count of owned tiles
+    const totalRows = await db
+      .select({ id: tileListing.id })
       .from(tileListing)
       .where(eq(tileListing.owner, wallet));
+    const total = totalRows.length;
+
+    let queryBuilder: any = db
+      .select()
+      .from(tileListing)
+      .where(eq(tileListing.owner, wallet))
+      .orderBy(desc(tileListing.createdAt));
+
+    if (limitQuery !== undefined) {
+      const limit = parseInt(limitQuery);
+      queryBuilder = queryBuilder.limit(limit);
+    }
+    if (offsetQuery !== undefined) {
+      const offset = parseInt(offsetQuery);
+      queryBuilder = queryBuilder.offset(offset);
+    }
+
+    const rows = await queryBuilder;
 
     // BigInt columns (priceLamports, listingPriceLamports) can't be JSON-serialized.
     // Convert them to strings before returning.
-    const safe = rows.map((r) => ({
+    const safe = rows.map((r: any) => ({
       ...r,
       priceLamports: r.priceLamports?.toString() ?? null,
       listingPriceLamports: r.listingPriceLamports?.toString() ?? null,
     }));
 
-    return c.json({ ok: true, tiles: safe });
+    return c.json({ ok: true, tiles: safe, total });
   } catch (err) {
     console.error("Owner tiles failed:", err);
     return c.json({ ok: false, error: "Failed to fetch owner tiles" }, 500);
