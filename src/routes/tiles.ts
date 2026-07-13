@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { eq, and, gte, lte, desc } from "drizzle-orm";
+import { eq, and, gte, lte, desc, or, ilike } from "drizzle-orm";
 import { latLngToCell } from "h3-js";
 import { mintTile, TILE_PRICE_USD, usdToLamports, getSolUsdPrice } from "../services/solana";
 import { db } from "../db/connection";
@@ -242,18 +242,32 @@ tiles.get("/owner/:wallet", async (c) => {
     const wallet = c.req.param("wallet");
     const limitQuery = c.req.query("limit");
     const offsetQuery = c.req.query("offset");
+    const search = c.req.query("search");
 
-    // Fetch total count of owned tiles
+    let conditions = eq(tileListing.owner, wallet);
+    if (search) {
+      // Find by coordinate string or cell ID
+      conditions = and(
+        conditions,
+        or(
+          ilike(tileListing.h3Cell, `%${search}%`),
+          ilike(tileListing.lat, `%${search}%`),
+          ilike(tileListing.lng, `%${search}%`)
+        )
+      ) as any;
+    }
+
+    // Fetch total count of owned tiles matching filters
     const totalRows = await db
       .select({ id: tileListing.id })
       .from(tileListing)
-      .where(eq(tileListing.owner, wallet));
+      .where(conditions);
     const total = totalRows.length;
 
     let queryBuilder: any = db
       .select()
       .from(tileListing)
-      .where(eq(tileListing.owner, wallet))
+      .where(conditions)
       .orderBy(desc(tileListing.createdAt));
 
     if (limitQuery !== undefined) {
