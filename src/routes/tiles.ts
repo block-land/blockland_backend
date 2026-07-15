@@ -339,31 +339,42 @@ tiles.get("/owner/:wallet", async (c) => {
     const limitQuery = c.req.query("limit");
     const offsetQuery = c.req.query("offset");
     const search = c.req.query("search");
+    const status = c.req.query("status"); // listed | owned | all
 
-    let conditions = eq(tileListing.owner, wallet);
+    let conditions: any[] = [eq(tileListing.owner, wallet)];
+
+    if (status === "all") {
+      // "all" tab should only show tiles that are owned but NOT listed.
+      // So status should be "owned"
+      conditions.push(eq(tileListing.status, "owned"));
+    } else if (status) {
+      conditions.push(eq(tileListing.status, status));
+    }
+
     if (search) {
       // Find by coordinate string or cell ID
-      conditions = and(
-        conditions,
+      conditions.push(
         or(
           ilike(tileListing.h3Cell, `%${search}%`),
           ilike(tileListing.lat, `%${search}%`),
           ilike(tileListing.lng, `%${search}%`)
         )
-      ) as any;
+      );
     }
+
+    const whereClause = and(...conditions);
 
     // Fetch total count of owned tiles matching filters
     const totalRows = await db
       .select({ id: tileListing.id })
       .from(tileListing)
-      .where(conditions);
+      .where(whereClause);
     const total = totalRows.length;
 
     let queryBuilder: any = db
       .select()
       .from(tileListing)
-      .where(conditions)
+      .where(whereClause)
       .orderBy(desc(tileListing.createdAt));
 
     if (limitQuery !== undefined) {
