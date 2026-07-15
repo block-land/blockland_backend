@@ -94,3 +94,15 @@ export const clientDetails = pgTable("client_details", {
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
+
+/** Active bids/offers on listed marketplace tiles. */
+export const tileOffer = pgTable("tile_offer", {
+  id: text("id").primaryKey(),
+  tileId: text("tile_id")
+    .notNull()
+    .references(() => tileListing.id, { onDelete: "cascade" }),
+  bidder: text("bidder").notNull(),
+  priceLamports: bigint("price_lamports", { mode: "bigint" }).notNull(),
+  txSignature: text("tx_signature"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});

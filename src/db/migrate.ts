@@ -19,6 +19,17 @@ async function run() {
         CONSTRAINT "client_details_wallet_address_unique" UNIQUE("wallet_address")
       );
     `;
+    
+    await sql`
+      CREATE TABLE IF NOT EXISTS "tile_offer" (
+        "id" text PRIMARY KEY NOT NULL,
+        "tile_id" text NOT NULL REFERENCES "tile_listing"("id") ON DELETE CASCADE,
+        "bidder" text NOT NULL,
+        "price_lamports" bigint NOT NULL,
+        "tx_signature" text,
+        "created_at" timestamp DEFAULT now() NOT NULL
+      );
+    `;
     console.log("Migration succeeded!");
   } catch (err) {
     console.error("Migration failed:", err);

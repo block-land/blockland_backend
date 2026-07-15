@@ -3,7 +3,7 @@ import { eq, and, gte, lte, desc, or, ilike } from "drizzle-orm";
 import { latLngToCell } from "h3-js";
 import { mintTile, TILE_PRICE_USD, usdToLamports, getSolUsdPrice } from "../services/solana";
 import { db } from "../db/connection";
-import { tileListing, saleEvent, clientDetails } from "../db/schema";
+import { tileListing, saleEvent, clientDetails, tileOffer } from "../db/schema";
 
 const H3_RESOLUTION = 7;
 
@@ -371,7 +371,8 @@ tiles.get("/owner/:wallet", async (c) => {
       .where(whereClause);
     const total = totalRows.length;
 
-    let queryBuilder: any = db
+    // Build the main query with clientDetails joined (publisher info)
+    let queryBuilder = db
       .select()
       .from(tileListing)
       .where(whereClause)
@@ -388,12 +389,19 @@ tiles.get("/owner/:wallet", async (c) => {
 
     const rows = await queryBuilder;
 
-    // BigInt columns (priceLamports, listingPriceLamports) can't be JSON-serialized.
-    // Convert them to strings before returning.
-    const safe = rows.map((r: any) => ({
-      ...r,
-      priceLamports: r.priceLamports?.toString() ?? null,
-      listingPriceLamports: r.listingPriceLamports?.toString() ?? null,
+    // Fetch offers count for each tile to return to frontend
+    const safe = await Promise.all(rows.map(async (r: any) => {
+      const countRes = await db
+        .select({ id: tileOffer.id })
+        .from(tileOffer)
+        .where(eq(tileOffer.tileId, r.id));
+      
+      return {
+        ...r,
+        priceLamports: r.priceLamports?.toString() ?? null,
+        listingPriceLamports: r.listingPriceLamports?.toString() ?? null,
+        offersCount: countRes.length,
+      };
     }));
 
     return c.json({ ok: true, tiles: safe, total });
@@ -432,5 +440,133 @@ tiles.put("/list", async (c) => {
   } catch (err) {
     console.error("Failed to list tile:", err);
     return c.json({ ok: false, error: "Internal server error" }, 500);
+  }
+});
+
+/**
+ * GET /api/tiles/:id
+ * Get details of a single tile by ID or assetId.
+ */
+tiles.get("/:id", async (c) => {
+  try {
+    const id = c.req.param("id");
+    
+    // Find by database id first, fallback to assetId
+    const rows = await db
+      .select({
+        id: tileListing.id,
+        assetId: tileListing.assetId,
+        h3Cell: tileListing.h3Cell,
+        lat: tileListing.lat,
+        lng: tileListing.lng,
+        rarity: tileListing.rarity,
+        status: tileListing.status,
+        seller: tileListing.seller,
+        owner: tileListing.owner,
+        priceLamports: tileListing.priceLamports,
+        listingPriceLamports: tileListing.listingPriceLamports,
+        metadataUri: tileListing.metadataUri,
+        imageUri: tileListing.imageUri,
+        txSignature: tileListing.txSignature,
+        listedAt: tileListing.listedAt,
+        soldAt: tileListing.soldAt,
+        createdAt: tileListing.createdAt,
+        publisherUsername: clientDetails.username,
+        publisherPhotoUrl: clientDetails.photoUrl,
+      })
+      .from(tileListing)
+      .leftJoin(
+        clientDetails,
+        eq(clientDetails.walletAddress, tileListing.owner)
+      )
+      .where(or(eq(tileListing.id, id), eq(tileListing.assetId, id)))
+      .limit(1);
+
+    if (rows.length === 0) {
+      return c.json({ ok: false, error: "Tile not found" }, 404);
+    }
+
+    const tile = rows[0];
+    const safe = {
+      ...tile,
+      priceLamports: tile.priceLamports?.toString() ?? null,
+      listingPriceLamports: tile.listingPriceLamports?.toString() ?? null,
+    };
+
+    return c.json({ ok: true, tile: safe });
+  } catch (err) {
+    console.error("Get tile detail failed:", err);
+    return c.json({ ok: false, error: "Failed to fetch tile details" }, 500);
+  }
+});
+
+/**
+ * GET /api/tiles/:id/offers
+ * Get active offers for a tile.
+ */
+tiles.get("/:id/offers", async (c) => {
+  try {
+    const tileId = c.req.param("id");
+
+    // Fetch offers joined with clientDetails for user info
+    const rows = await db
+      .select({
+        id: tileOffer.id,
+        bidder: tileOffer.bidder,
+        priceLamports: tileOffer.priceLamports,
+        txSignature: tileOffer.txSignature,
+        createdAt: tileOffer.createdAt,
+        bidderUsername: clientDetails.username,
+        bidderPhotoUrl: clientDetails.photoUrl,
+      })
+      .from(tileOffer)
+      .leftJoin(
+        clientDetails,
+        eq(clientDetails.walletAddress, tileOffer.bidder)
+      )
+      .where(eq(tileOffer.tileId, tileId))
+      .orderBy(desc(tileOffer.priceLamports));
+
+    const safe = rows.map((r: any) => ({
+      ...r,
+      priceLamports: r.priceLamports.toString(),
+    }));
+
+    return c.json({ ok: true, offers: safe });
+  } catch (err) {
+    console.error("Get offers failed:", err);
+    return c.json({ ok: false, error: "Failed to fetch offers" }, 500);
+  }
+});
+
+/**
+ * POST /api/tiles/:id/offers
+ * Place a new offer on a tile.
+ */
+tiles.post("/:id/offers", async (c) => {
+  try {
+    const tileId = c.req.param("id");
+    const { bidder, priceSol, txSignature } = await c.req.json();
+
+    if (!bidder || priceSol === undefined || parseFloat(priceSol) <= 0) {
+      return c.json({ ok: false, error: "Invalid inputs" }, 400);
+    }
+
+    const priceLamports = BigInt(Math.round(parseFloat(priceSol) * 1_000_000_000));
+    const id = crypto.randomUUID();
+
+    await db.insert(tileOffer).values({
+      id,
+      tileId,
+      bidder,
+      priceLamports,
+      txSignature: txSignature || null,
+      createdAt: new Date(),
+    });
+
+    return c.json({ ok: true, offerId: id });
+  } catch (err) {
+    console.error("Place offer failed:", err);
+    return c.json({ ok: false, error: "Failed to place offer" }, 500);
   }
 });
