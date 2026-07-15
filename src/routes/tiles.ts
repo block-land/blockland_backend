@@ -215,17 +215,113 @@ tiles.get("/bounds", async (c) => {
 
 /**
  * GET /api/tiles
- * List all tiles (optionally filtered by status).
+ * List all tiles with pagination, filtering (search, rarity, status), sorting, and publisher info.
  */
 tiles.get("/", async (c) => {
   try {
-    const rows = await db.select().from(tileListing);
-    const safe = rows.map((r) => ({
+    const limitQuery = c.req.query("limit");
+    const offsetQuery = c.req.query("offset");
+    const search = c.req.query("search");
+    const rarity = c.req.query("rarity");
+    const sort = c.req.query("sort") ?? "price-desc"; // price-desc | price-asc
+
+    // Filter by status: in a marketplace, we show listed tiles.
+    // If not specified, we can show listed tiles by default, but let's allow showing all or listed.
+    const statusFilter = c.req.query("status") ?? "listed";
+
+    let conditions: any[] = [];
+
+    if (statusFilter !== "all") {
+      conditions.push(eq(tileListing.status, statusFilter));
+    }
+
+    if (rarity && rarity !== "All") {
+      conditions.push(eq(tileListing.rarity, rarity));
+    }
+
+    if (search) {
+      conditions.push(
+        or(
+          ilike(tileListing.h3Cell, `%${search}%`),
+          ilike(tileListing.lat, `%${search}%`),
+          ilike(tileListing.lng, `%${search}%`),
+          ilike(tileListing.owner, `%${search}%`)
+        )
+      );
+    }
+
+    const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
+
+    // Get total count matching conditions
+    const countQuery = db
+      .select({ id: tileListing.id })
+      .from(tileListing);
+    
+    if (whereClause) {
+      countQuery.where(whereClause);
+    }
+    const totalRows = await countQuery;
+    const total = totalRows.length;
+
+    // Build the main query with clientDetails joined (publisher info)
+    let queryBuilder = db
+      .select({
+        id: tileListing.id,
+        assetId: tileListing.assetId,
+        h3Cell: tileListing.h3Cell,
+        lat: tileListing.lat,
+        lng: tileListing.lng,
+        rarity: tileListing.rarity,
+        status: tileListing.status,
+        seller: tileListing.seller,
+        owner: tileListing.owner,
+        priceLamports: tileListing.priceLamports,
+        listingPriceLamports: tileListing.listingPriceLamports,
+        metadataUri: tileListing.metadataUri,
+        imageUri: tileListing.imageUri,
+        txSignature: tileListing.txSignature,
+        listedAt: tileListing.listedAt,
+        soldAt: tileListing.soldAt,
+        createdAt: tileListing.createdAt,
+        publisherUsername: clientDetails.username,
+        publisherPhotoUrl: clientDetails.photoUrl,
+      })
+      .from(tileListing)
+      .leftJoin(
+        clientDetails,
+        eq(clientDetails.walletAddress, tileListing.owner)
+      );
+
+    if (whereClause) {
+      queryBuilder.where(whereClause) as any;
+    }
+
+    // Sorting by price desimal (listingPriceLamports)
+    if (sort === "price-asc") {
+      queryBuilder.orderBy(tileListing.listingPriceLamports) as any;
+    } else {
+      queryBuilder.orderBy(desc(tileListing.listingPriceLamports)) as any;
+    }
+
+    if (limitQuery !== undefined) {
+      const limit = parseInt(limitQuery);
+      queryBuilder.limit(limit) as any;
+    }
+    if (offsetQuery !== undefined) {
+      const offset = parseInt(offsetQuery);
+      queryBuilder.offset(offset) as any;
+    }
+
+    const rows = await queryBuilder;
+
+    // Convert BigInt columns to string for JSON serialization
+    const safe = rows.map((r: any) => ({
       ...r,
       priceLamports: r.priceLamports?.toString() ?? null,
       listingPriceLamports: r.listingPriceLamports?.toString() ?? null,
     }));
-    return c.json({ ok: true, tiles: safe });
+
+    return c.json({ ok: true, tiles: safe, total });
   } catch (err) {
     console.error("List tiles failed:", err);
     return c.json({ ok: false, error: "Failed to list tiles" }, 500);
@@ -293,5 +389,37 @@ tiles.get("/owner/:wallet", async (c) => {
   } catch (err) {
     console.error("Owner tiles failed:", err);
     return c.json({ ok: false, error: "Failed to fetch owner tiles" }, 500);
+  }
+});
+
+/**
+ * PUT /api/tiles/list
+ * List a tile for sale in the marketplace.
+ */
+tiles.put("/list", async (c) => {
+  try {
+    const { assetId, priceSol, seller } = await c.req.json();
+
+    if (!assetId || !seller || priceSol === undefined || parseFloat(priceSol) <= 0) {
+      return c.json({ ok: false, error: "Invalid inputs" }, 400);
+    }
+
+    const priceLamports = BigInt(Math.round(parseFloat(priceSol) * 1_000_000_000));
+
+    // Update status, seller, listingPriceLamports, and listedAt
+    const result = await db
+      .update(tileListing)
+      .set({
+        status: "listed",
+        seller,
+        listingPriceLamports: priceLamports,
+        listedAt: new Date(),
+      })
+      .where(and(eq(tileListing.assetId, assetId), eq(tileListing.owner, seller)));
+
+    return c.json({ ok: true });
+  } catch (err) {
+    console.error("Failed to list tile:", err);
+    return c.json({ ok: false, error: "Internal server error" }, 500);
   }
 });
