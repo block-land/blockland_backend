@@ -1,9 +1,50 @@
 import { Hono } from "hono";
-import { eq } from "drizzle-orm";
+import { eq, or, ilike, and, ne } from "drizzle-orm";
 import { db } from "../db/connection";
 import { clientDetails } from "../db/schema";
 
 export const clientRouter = new Hono();
+
+// GET /api/client/search?q=<query>&exclude=<wallet>
+// Search registered users by username OR wallet address, for starting a chat.
+// `exclude` (the caller's own wallet) is always filtered out to prevent
+// self-chat. MUST be defined before /:walletAddress so Hono matches the
+// static path first.
+clientRouter.get("/search", async (c) => {
+  try {
+    const q = c.req.query("q")?.trim();
+    const exclude = c.req.query("exclude")?.trim();
+    if (!q || q.length < 2) {
+      return c.json({ ok: true, users: [] });
+    }
+
+    const pattern = `%${q}%`;
+    const conditions = [
+      or(
+        ilike(clientDetails.username, pattern),
+        ilike(clientDetails.walletAddress, pattern)
+      ),
+    ];
+    if (exclude) {
+      conditions.push(ne(clientDetails.walletAddress, exclude));
+    }
+
+    const rows = await db
+      .select({
+        walletAddress: clientDetails.walletAddress,
+        username: clientDetails.username,
+        photoUrl: clientDetails.photoUrl,
+      })
+      .from(clientDetails)
+      .where(and(...conditions))
+      .limit(20);
+
+    return c.json({ ok: true, users: rows });
+  } catch (err) {
+    console.error("Search users error:", err);
+    return c.json({ ok: false, error: "Internal server error" }, 500);
+  }
+});
 
 // GET /api/client/:walletAddress
 // Fetch user details by wallet address

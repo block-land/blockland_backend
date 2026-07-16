@@ -4,7 +4,7 @@ import * as schema from "./schema";
 
 const connectionString = process.env.DATABASE_URL || "postgresql://postgres:postgres@localhost:5432/postgres";
 
-// Disable SSL verification issues for development if needed, standard connection options
-const client = postgres(connectionString, { max: 1 });
+// Allow concurrent queries (SSE connections + worker + HTTP). Was max:1.
+const client = postgres(connectionString, { max: 10 });
 
 export const db = drizzle(client, { schema });

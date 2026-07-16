@@ -3,7 +3,12 @@ import { cors } from "hono/cors";
 import { auth } from "./lib/auth";
 import { tiles } from "./routes/tiles";
 import { clientRouter } from "./routes/client";
+import { messagesRouter } from "./routes/messages";
+import { startMessageWorker } from "./lib/worker";
 import "dotenv/config";
+
+// Start the BullMQ message-persistence worker (same process for dev simplicity).
+startMessageWorker();
 
 const app = new Hono();
 
@@ -56,6 +61,9 @@ app.route("/api/tiles", tiles);
 // Client details routes
 app.route("/api/client", clientRouter);
 
+// Messaging routes (send, list, history, read, SSE stream)
+app.route("/api/messages", messagesRouter);
+
 const port = process.env.PORT ? parseInt(process.env.PORT) : 3001;
 
 console.log(`Blockland backend running on http://localhost:${port}`);
@@ -63,4 +71,8 @@ console.log(`Blockland backend running on http://localhost:${port}`);
 export default {
   port,
   fetch: app.fetch,
+  // SSE streams (e.g. /api/messages/stream) are long-lived connections. Bun's
+  // default idleTimeout is 10s, which would kill the stream before the first
+  // 25s heartbeat. 255s is Bun's max (equals HTTP/2 keepalive default).
+  idleTimeout: 255,
 };

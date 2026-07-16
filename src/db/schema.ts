@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, boolean, integer, bigint, numeric } from "drizzle-orm/pg-core";
+import { pgTable, text, timestamp, boolean, integer, bigint, numeric, uniqueIndex, index } from "drizzle-orm/pg-core";
 
 export const user = pgTable("user", {
   id: text("id").primaryKey(),
@@ -106,3 +106,48 @@ export const tileOffer = pgTable("tile_offer", {
   txSignature: text("tx_signature"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
+
+// ---- Messaging tables ----
+
+/**
+ * A 1:1 conversation between two wallets. Participant wallets are stored in
+ * lexicographic order (participantA < participantB) so each pair maps to a
+ * single row. `tileId` is the tile currently under discussion (shown as a
+ * product context card, Shopee-style); reused across tiles between the same
+ * pair of users.
+ */
+export const conversation = pgTable(
+  "conversation",
+  {
+    id: text("id").primaryKey(),
+    participantA: text("participant_a").notNull(),
+    participantB: text("participant_b").notNull(),
+    tileId: text("tile_id").references(() => tileListing.id, { onDelete: "set null" }),
+    lastMessageText: text("last_message_text"),
+    lastMessageAt: timestamp("last_message_at"),
+    unreadA: integer("unread_a").notNull().default(0),
+    unreadB: integer("unread_b").notNull().default(0),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (t) => ({
+    pairIdx: uniqueIndex("conversation_pair_idx").on(t.participantA, t.participantB),
+  })
+);
+
+/** A single chat message within a conversation. */
+export const message = pgTable(
+  "message",
+  {
+    id: text("id").primaryKey(),
+    conversationId: text("conversation_id")
+      .notNull()
+      .references(() => conversation.id, { onDelete: "cascade" }),
+    senderWallet: text("sender_wallet").notNull(),
+    text: text("text").notNull(),
+    readAt: timestamp("read_at"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (t) => ({
+    convIdx: index("message_conversation_idx").on(t.conversationId, t.createdAt),
+  })
+);
