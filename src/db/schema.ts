@@ -63,6 +63,7 @@ export const tileListing = pgTable("tile_listing", {
   status: text("status").notNull().default("owned"), // owned | listed | sold
   seller: text("seller"),
   owner: text("owner").notNull(),
+  custodian: text("custodian"), // dev wallet holding the tile in custody while listed
   priceLamports: bigint("price_lamports", { mode: "bigint" }),
   listingPriceLamports: bigint("listing_price_lamports", { mode: "bigint" }),
   metadataUri: text("metadata_uri"),
@@ -104,6 +105,9 @@ export const tileOffer = pgTable("tile_offer", {
   bidder: text("bidder").notNull(),
   priceLamports: bigint("price_lamports", { mode: "bigint" }).notNull(),
   txSignature: text("tx_signature"),
+  escrowTx: text("escrow_tx"), // signature of SOL locked into dev wallet when the offer is made
+  refundTx: text("refund_tx"), // signature of SOL returned to the bidder (cancel/decline/lost-approve)
+  status: text("status").notNull().default("pending"), // "pending" | "accepted" | "declined" | "cancelled"
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
 

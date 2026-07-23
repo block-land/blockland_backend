@@ -31,6 +31,18 @@ async function run() {
       );
     `;
 
+    // Add status column to existing tile_offer tables (idempotent).
+    // Values: "pending" (default) | "accepted" | "declined"
+    await sql`ALTER TABLE "tile_offer" ADD COLUMN IF NOT EXISTS "status" text NOT NULL DEFAULT 'pending';`;
+
+    // Marketplace custody/escrow support:
+    // - tile_listing.custodian: dev wallet that holds the tile while listed
+    await sql`ALTER TABLE "tile_listing" ADD COLUMN IF NOT EXISTS "custodian" text;`;
+    // - tile_offer.escrow_tx: signature of SOL locked into the dev wallet when an offer is made
+    await sql`ALTER TABLE "tile_offer" ADD COLUMN IF NOT EXISTS "escrow_tx" text;`;
+    // - tile_offer.refund_tx: signature of SOL returned to the bidder (cancel/decline/lost-approve)
+    await sql`ALTER TABLE "tile_offer" ADD COLUMN IF NOT EXISTS "refund_tx" text;`;
+
     await sql`
       CREATE TABLE IF NOT EXISTS "conversation" (
         "id" text PRIMARY KEY NOT NULL,

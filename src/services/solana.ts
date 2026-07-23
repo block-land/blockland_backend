@@ -12,8 +12,16 @@ import {
   mplBubblegum,
   parseLeafFromMintV1Transaction,
   findLeafAssetIdPda,
+  getAssetWithProof,
+  transfer as transferInstruction,
 } from "@metaplex-foundation/mpl-bubblegum";
-import { publicKey, keypairIdentity, none } from "@metaplex-foundation/umi";
+import { dasApi } from "@metaplex-foundation/digital-asset-standard-api";
+import {
+  publicKey,
+  keypairIdentity,
+  none,
+  createNoopSigner,
+} from "@metaplex-foundation/umi";
 import { Keypair } from "@solana/web3.js";
 import { readFileSync } from "fs";
 import path from "path";
@@ -99,6 +107,38 @@ function getAdminWalletBytes(): Uint8Array {
 function loadAdminKeypair(): Keypair {
   const bytes = getAdminWalletBytes();
   return Keypair.fromSecretKey(bytes);
+}
+
+/**
+ * Dev (custodian) wallet that holds tiles + escrowed SOL while a tile is listed
+ * on the marketplace. This lets the backend transfer the tile and settle offers
+ * without the seller being online.
+ *
+ * Configurable via DEV_WALLET_JSON (raw key array) or DEV_WALLET_PATH (file).
+ * Falls back to the admin wallet so the app still works in a single-key dev setup.
+ */
+function getDevWalletBytes(): Uint8Array {
+  if (process.env.DEV_WALLET_JSON) {
+    try {
+      return Uint8Array.from(JSON.parse(process.env.DEV_WALLET_JSON));
+    } catch (e) {
+      console.error("Failed to parse DEV_WALLET_JSON:", e);
+    }
+  }
+  if (process.env.DEV_WALLET_PATH) {
+    return Uint8Array.from(JSON.parse(readFileSync(process.env.DEV_WALLET_PATH, "utf-8")));
+  }
+  // Fallback: reuse the admin wallet (single-key dev setup).
+  return getAdminWalletBytes();
+}
+
+export function loadDevKeypair(): Keypair {
+  return Keypair.fromSecretKey(getDevWalletBytes());
+}
+
+/** Public address of the custodian (dev) wallet. */
+export function devWalletAddress(): string {
+  return loadDevKeypair().publicKey.toBase58();
 }
 
 /**
@@ -281,4 +321,129 @@ export async function mintTile(params: {
   );
 
   return { assetId, signature, metadataUri, imageUri };
+}
+
+/**
+ * Build a Umi instance wired with the Bubblegum program + DAS RPC, identified
+ * by the given secret-key bytes (used for backend-driven cNFT transfers).
+ */
+function umiWithBubblegum(secretKey: Uint8Array) {
+  const umi = createUmi(RPC_URL);
+  const umiKeypair = umi.eddsa.createKeypairFromSecretKey(secretKey);
+  umi.use(keypairIdentity(umiKeypair));
+  umi.use(mplBubblegum());
+  umi.use(dasApi());
+  return umi;
+}
+
+/**
+ * Transfer a compressed NFT (tile) to a new owner, signed by the custodian
+ * (dev wallet). The dev wallet must currently be the leaf owner — i.e. the
+ * seller must have listed the tile into custody first.
+ *
+ * Returns the transaction signature.
+ */
+export async function transferCompressedTile(params: {
+  assetId: string;
+  to: string; // new owner (bidder/buyer) public key
+}): Promise<string> {
+  const umi = umiWithBubblegum(getDevWalletBytes());
+  const devPk = loadDevKeypair().publicKey.toBase58();
+
+  const assetWithProof = await getAssetWithProof(
+    umi,
+    publicKey(params.assetId)
+  );
+
+  const builder = transferInstruction(umi, {
+    merkleTree: publicKey(MERKLE_TREE),
+    root: assetWithProof.root,
+    dataHash: assetWithProof.dataHash,
+    creatorHash: assetWithProof.creatorHash,
+    nonce: assetWithProof.nonce,
+    index: assetWithProof.index,
+    proof: assetWithProof.proof,
+    leafOwner: publicKey(devPk),
+    newLeafOwner: publicKey(params.to),
+  });
+
+  const result = await builder.sendAndConfirm(umi, { send: { commitment: "confirmed" } });
+  return result.signature.toString();
+}
+
+/**
+ * Build (but do NOT sign/submit) a transaction that transfers a tile from the
+ * seller into the custodian (dev) wallet. This is the on-chain "listing" step.
+ *
+ * The returned base64 transaction bytes are sent to the frontend, where the
+ * seller signs with their wallet (they are the current leaf owner). After the
+ * frontend submits it, the backend records the custodian and listing price.
+ */
+export async function buildListToCustodyTx(params: {
+  assetId: string;
+  seller: string; // current owner, must sign on the frontend
+  custodian: string; // dev wallet that will hold the tile
+}): Promise<string> {
+  const umi = createUmi(RPC_URL);
+  umi.use(mplBubblegum());
+  umi.use(dasApi());
+
+  const assetWithProof = await getAssetWithProof(
+    umi,
+    publicKey(params.assetId)
+  );
+
+  const sellerSigner = createNoopSigner(publicKey(params.seller));
+
+  // Seller is the leaf owner and must sign on the client — use a noop signer
+  // so the builder leaves their signature slot open for the wallet to fill.
+  const builder = transferInstruction(umi, {
+    merkleTree: publicKey(MERKLE_TREE),
+    root: assetWithProof.root,
+    dataHash: assetWithProof.dataHash,
+    creatorHash: assetWithProof.creatorHash,
+    nonce: assetWithProof.nonce,
+    index: assetWithProof.index,
+    proof: assetWithProof.proof,
+    leafOwner: sellerSigner,
+    newLeafOwner: publicKey(params.custodian),
+  })
+    .setFeePayer(sellerSigner)
+    .setBlockhash((await umi.rpc.getLatestBlockhash()).blockhash);
+
+  // Build the unsigned transaction, then fully serialize it as base64 so the
+  // frontend wallet can sign + submit it.
+  const transaction = builder.build(umi);
+  const serialized = umi.transactions.serialize(transaction);
+  return Buffer.from(serialized).toString("base64");
+}
+
+/**
+ * Move SOL from the custodian (dev wallet) to a recipient. Used to settle an
+ * accepted offer (SOL -> seller) and to refund cancelled/declined/lost offers
+ * (SOL -> bidder). The dev wallet signs and pays the fee.
+ *
+ * Returns the transaction signature.
+ */
+export async function sendSolFromCustodian(params: {
+  to: string;
+  lamports: bigint;
+}): Promise<string> {
+  const dev = loadDevKeypair();
+  const { Connection, PublicKey, SystemProgram, Transaction, sendAndConfirmTransaction } =
+    await import("@solana/web3.js");
+  const connection = new Connection(RPC_URL, "confirmed");
+
+  const ix = SystemProgram.transfer({
+    fromPubkey: dev.publicKey,
+    toPubkey: new PublicKey(params.to),
+    lamports: Number(params.lamports),
+  });
+
+  const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash();
+  const tx = new Transaction({ feePayer: dev.publicKey, blockhash, lastValidBlockHeight });
+  tx.add(ix);
+
+  const sig = await sendAndConfirmTransaction(connection, tx, [dev]);
+  return sig;
 }
