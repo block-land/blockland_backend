@@ -65,7 +65,7 @@ tiles.get("/price", async (c) => {
 tiles.post("/mint", async (c) => {
   try {
     const body = await c.req.json();
-    const { buyer, lat, lng, imageBase64, rarity } = body;
+    const { buyer, lat, lng, imageBase64, rarity, placeName } = body;
 
     // Basic validation
     if (!buyer || typeof buyer !== "string") {
@@ -132,6 +132,7 @@ tiles.post("/mint", async (c) => {
       metadataUri: result.metadataUri,
       imageUri: result.imageUri,
       txSignature: result.signature,
+      placeName: typeof placeName === "string" && placeName.trim() ? placeName.trim() : null,
     });
 
     await db.insert(saleEvent).values({
@@ -176,6 +177,7 @@ tiles.get("/bounds", async (c) => {
         assetId: tileListing.assetId,
         lat: tileListing.lat,
         lng: tileListing.lng,
+        placeName: tileListing.placeName,
         priceLamports: tileListing.priceLamports,
         username: clientDetails.username,
         photoUrl: clientDetails.photoUrl,
@@ -205,6 +207,7 @@ tiles.get("/bounds", async (c) => {
           username: row.username ?? null,
           photoUrl: row.photoUrl ?? null,
           assetId: row.assetId,
+          placeName: row.placeName ?? null,
           priceLamports: row.priceLamports?.toString() ?? null,
           status: "sold",
         },

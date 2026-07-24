@@ -187,7 +187,7 @@ export async function uploadToIrys(
   } finally {
     unlinkSync(imagePath);
   }
-  const imageUri = `https://arweave.net/${imageId}`;
+  const imageUri = `https://gateway.irys.xyz/${imageId}`;
 
   // 2. Build metadata JSON + upload
   const metadataJson = {
@@ -219,7 +219,7 @@ export async function uploadToIrys(
   } finally {
     unlinkSync(metaPath);
   }
-  const metadataUri = `https://arweave.net/${metaId}`;
+  const metadataUri = `https://gateway.irys.xyz/${metaId}`;
 
   return { metadataUri, imageUri };
 }

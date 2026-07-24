@@ -43,6 +43,10 @@ async function run() {
     // - tile_offer.refund_tx: signature of SOL returned to the bidder (cancel/decline/lost-approve)
     await sql`ALTER TABLE "tile_offer" ADD COLUMN IF NOT EXISTS "refund_tx" text;`;
 
+    // tile_listing.place_name: human-readable place name (reverse-geocoded once
+    // at mint time so the frontend doesn't re-call the Mapbox API on every view).
+    await sql`ALTER TABLE "tile_listing" ADD COLUMN IF NOT EXISTS "place_name" text;`;
+
     await sql`
       CREATE TABLE IF NOT EXISTS "conversation" (
         "id" text PRIMARY KEY NOT NULL,

@@ -69,6 +69,7 @@ export const tileListing = pgTable("tile_listing", {
   metadataUri: text("metadata_uri"),
   imageUri: text("image_uri"),
   txSignature: text("tx_signature"),
+  placeName: text("place_name"), // human-readable place name (reverse-geocoded once at mint)
   listedAt: timestamp("listed_at"),
   soldAt: timestamp("sold_at"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
