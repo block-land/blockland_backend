@@ -12,11 +12,26 @@ startMessageWorker();
 
 const app = new Hono();
 
-// CORS — allow frontend (Next.js :3000) to call backend (:3001)
+const defaultCorsOrigins = [
+  "http://localhost:3000",
+  "http://localhost:3001",
+  "http://blockland.app",
+  "https://blockland.app",
+];
+const allowedCorsOrigins = [
+  ...new Set(
+    (process.env.CORS_ORIGINS ?? defaultCorsOrigins.join(","))
+      .split(",")
+      .map((origin) => origin.trim())
+      .filter(Boolean),
+  ),
+];
+
+// Browser requests are accepted only from configured frontend origins.
 app.use(
   "*",
   cors({
-    origin: ["http://localhost:3000", "http://localhost:3001"],
+    origin: allowedCorsOrigins,
     allowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allowHeaders: ["Content-Type", "Authorization"],
     credentials: true,

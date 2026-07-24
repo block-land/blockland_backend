@@ -33,6 +33,7 @@ services:
       REDIS_URL: ${REDIS_URL:-redis://redis:6379}
       BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?Set BETTER_AUTH_SECRET in .env}
       BETTER_AUTH_URL: ${BETTER_AUTH_URL:-http://localhost:3001}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000,http://blockland.app,https://blockland.app}
       SOLANA_CLUSTER: ${SOLANA_CLUSTER:-devnet}
       SOLANA_RPC_URL: ${SOLANA_RPC_URL:-https://api.devnet.solana.com}
       MERKLE_TREE: ${MERKLE_TREE:-89A62B9Bn45Nofa5CQXFUdyPPuo5Eth3rJkB288XWWGz}
