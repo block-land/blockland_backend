@@ -1,21 +1,4 @@
 services:
-  postgres:
-    image: postgres:16-alpine
-    environment:
-      POSTGRES_DB: ${POSTGRES_DB:-blockland}
-      POSTGRES_USER: ${POSTGRES_USER:-blockland}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-blockland}
-    volumes:
-      - postgres-data:/var/lib/postgresql/data
-    ports:
-      - "${POSTGRES_PORT:-5432}:5432"
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
-      interval: 5s
-      timeout: 5s
-      retries: 12
-    restart: unless-stopped
-
   redis:
     image: redis:7-alpine
     command: redis-server --appendonly yes
@@ -33,11 +16,9 @@ services:
       context: .
       dockerfile: Dockerfile
     environment:
-      DATABASE_URL: postgresql://${POSTGRES_USER:-blockland}:${POSTGRES_PASSWORD:-blockland}@postgres:5432/${POSTGRES_DB:-blockland}
-    depends_on:
-      postgres:
-        condition: service_healthy
+      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL to the Supabase connection string in .env}
     command: sh -c "bunx drizzle-kit push --force && bun run src/db/migrate.ts"
+    profiles: ["migrate"]
     restart: "no"
 
   backend:
@@ -48,8 +29,8 @@ services:
       - "${PORT:-3001}:3001"
     environment:
       PORT: 3001
-      DATABASE_URL: postgresql://${POSTGRES_USER:-blockland}:${POSTGRES_PASSWORD:-blockland}@postgres:5432/${POSTGRES_DB:-blockland}
-      REDIS_URL: redis://redis:6379
+      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL to the Supabase connection string in .env}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
       BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?Set BETTER_AUTH_SECRET in .env}
       BETTER_AUTH_URL: ${BETTER_AUTH_URL:-http://localhost:3001}
       SOLANA_CLUSTER: ${SOLANA_CLUSTER:-devnet}
@@ -60,8 +41,6 @@ services:
       ADMIN_WALLET_JSON: ${ADMIN_WALLET_JSON:-}
       DEV_WALLET_JSON: ${DEV_WALLET_JSON:-}
     depends_on:
-      migrate:
-        condition: service_completed_successfully
       redis:
         condition: service_healthy
     healthcheck:
@@ -73,5 +52,4 @@ services:
     restart: unless-stopped
 
 volumes:
-  postgres-data:
   redis-data:
